@@ -1,0 +1,33 @@
+name: Build AuthAlwaysOnTop
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+
+      - name: Build Release x64
+        run: msbuild AuthAlwaysOnTop.sln /m /p:Configuration=Release /p:Platform=x64
+
+      - name: List built executables
+        shell: pwsh
+        run: Get-ChildItem -Recurse -Filter *.exe | Select-Object FullName,Length
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuthAlwaysOnTop-x64
+          path: '**/AuthAlwaysOnTop.exe'
