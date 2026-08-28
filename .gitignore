@@ -12,6 +12,7 @@ AuthAlwaysOnTop/x64/
 *.user
 *.userosscache
 *.sln.docstates
+*.aps
 
 # Build results
 [Bb]in/
@@ -41,6 +42,7 @@ ipch/
 *.tmp
 *.cache
 *.manifest
+!AuthAlwaysOnTop/AuthAlwaysOnTop.manifest
 *.tlog/
 *.lastbuildstate
 

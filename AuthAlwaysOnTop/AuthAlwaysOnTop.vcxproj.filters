@@ -30,8 +30,8 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <Image Include="C:\Users\Dom\Downloads\AuthAlwaysOnTop.ico">
+    <Image Include="AuthAlwaysOnTop.ico">
       <Filter>Resource Files</Filter>
     </Image>
   </ItemGroup>
-</Project>
+</Project>
