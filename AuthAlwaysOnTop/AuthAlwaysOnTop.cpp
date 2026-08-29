@@ -84,9 +84,11 @@ static HWINEVENTHOOK  g_hEventHook     = NULL;
 static HANDLE         g_hMutex         = NULL;
 static UINT           g_taskbarCreated = 0;
 
-static BOOL g_trayIconVisible  = TRUE;
-static BOOL g_trayIconAdded    = FALSE;
-static BOOL g_hotkeyRegistered = FALSE;
+static BOOL  g_trayIconVisible  = TRUE;
+static BOOL  g_trayIconAdded    = FALSE;
+static BOOL  g_hotkeyRegistered = FALSE;
+static HICON g_trayIcon         = NULL;
+static BOOL  g_trayIconOwned    = FALSE;
 
 static TCHAR g_exePath[MAX_PATH]    = { 0 };
 static TCHAR g_configPath[MAX_PATH] = { 0 };
@@ -388,9 +390,36 @@ static void CALLBACK WinEventProc(HWINEVENTHOOK hHook, DWORD event, HWND hwnd,
 /* Tray icon and hotkey                                                       */
 /* ------------------------------------------------------------------------- */
 
+static void ReleaseTrayIcon(void) {
+    if (g_trayIcon != NULL && g_trayIconOwned)
+        DestroyIcon(g_trayIcon);
+
+    g_trayIcon      = NULL;
+    g_trayIconOwned = FALSE;
+}
+
+/* LoadIcon only ever returns the SM_CXICON sized image and leaves it to the
+ * shell to shrink it for the notification area. The icon resource carries a
+ * separately drawn 16 px variant, and only LoadImage asking for the small
+ * metric picks it. LoadImage hands back a private copy that we own; the
+ * LoadIcon fallback is a shared resource that must not be destroyed. */
+static void AcquireTrayIcon(void) {
+    ReleaseTrayIcon();
+
+    g_trayIcon = (HICON)LoadImage(g_hInst, MAKEINTRESOURCE(IDI_ICON5), IMAGE_ICON,
+                                  GetSystemMetrics(SM_CXSMICON),
+                                  GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+    g_trayIconOwned = (g_trayIcon != NULL);
+
+    if (g_trayIcon == NULL)
+        g_trayIcon = LoadIcon(g_hInst, MAKEINTRESOURCE(IDI_ICON5));
+}
+
 static BOOL AddTrayIcon(HWND hwnd) {
     if (g_trayIconAdded)
         return TRUE;
+
+    AcquireTrayIcon();
 
     ZeroMemory(&g_nid, sizeof(g_nid));
     g_nid.cbSize           = sizeof(g_nid);
@@ -398,19 +427,23 @@ static BOOL AddTrayIcon(HWND hwnd) {
     g_nid.uID              = 1;
     g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon            = LoadIcon(g_hInst, MAKEINTRESOURCE(IDI_ICON5));
+    g_nid.hIcon            = g_trayIcon;
     StringCchCopy(g_nid.szTip, ARRAYSIZE(g_nid.szTip), _T("AuthAlwaysOnTop"));
 
     g_trayIconAdded = Shell_NotifyIcon(NIM_ADD, &g_nid);
+    if (!g_trayIconAdded)
+        ReleaseTrayIcon();
+
     return g_trayIconAdded;
 }
 
 static void RemoveTrayIcon(void) {
-    if (!g_trayIconAdded)
-        return;
+    if (g_trayIconAdded) {
+        Shell_NotifyIcon(NIM_DELETE, &g_nid);
+        g_trayIconAdded = FALSE;
+    }
 
-    Shell_NotifyIcon(NIM_DELETE, &g_nid);
-    g_trayIconAdded = FALSE;
+    ReleaseTrayIcon();
 }
 
 static void SetTrayIconVisible(HWND hwnd, BOOL visible) {
