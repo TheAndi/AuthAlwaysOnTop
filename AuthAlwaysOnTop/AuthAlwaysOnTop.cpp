@@ -93,6 +93,8 @@ static BOOL  g_trayIconOwned    = FALSE;
 static TCHAR g_exePath[MAX_PATH]    = { 0 };
 static TCHAR g_configPath[MAX_PATH] = { 0 };
 static TCHAR g_brokerPath[MAX_PATH] = { 0 };
+static TCHAR g_logPath[MAX_PATH]    = { 0 };
+static BOOL  g_logging              = FALSE;
 
 static HWND g_pendingBrokerWnd  = NULL;
 static int  g_foregroundRetries = 0;
@@ -141,6 +143,51 @@ static void ResolveConfigPath(void) {
 
     CreateDirectory(dir, NULL);
     PathCombine(g_configPath, dir, _T("config.ini"));
+}
+
+/* Diagnostics, off unless started with --log. Detection runs inside a hook
+ * that fires thousands of times a second and only matters at the moment a
+ * credential prompt appears, which is exactly when nobody is attached with a
+ * debugger, so a log file is the only practical way to see what happened. */
+static void ResolveLogPath(void) {
+    StringCchCopy(g_logPath, ARRAYSIZE(g_logPath), g_configPath);
+    PathRemoveFileSpec(g_logPath);
+    PathAppend(g_logPath, _T("authalwaysontop.log"));
+}
+
+static void LogLine(const TCHAR* fmt, ...) {
+    if (!g_logging || g_logPath[0] == _T('\0'))
+        return;
+
+    TCHAR line[1024];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    StringCchPrintf(line, ARRAYSIZE(line), _T("%02u:%02u:%02u.%03u  "),
+                    st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+    size_t used = 0;
+    StringCchLength(line, ARRAYSIZE(line), &used);
+
+    va_list args;
+    va_start(args, fmt);
+    StringCchVPrintf(line + used, ARRAYSIZE(line) - used, fmt, args);
+    va_end(args);
+
+    StringCchCat(line, ARRAYSIZE(line), _T("\r\n"));
+
+    char utf8[2048];
+    int cb = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8), NULL, NULL);
+    if (cb <= 1)
+        return;
+
+    HANDLE h = CreateFile(g_logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+
+    DWORD written = 0;
+    WriteFile(h, utf8, (DWORD)(cb - 1), &written, NULL);
+    CloseHandle(h);
 }
 
 static void LoadSettings(void) {
@@ -287,9 +334,11 @@ static BOOL IsBrokerProcess(DWORD pid) {
 /* ------------------------------------------------------------------------- */
 
 /* Windows only lets the foreground process give focus away. Dropping the
- * foreground lock timeout for the duration of the call is enough, and unlike
- * the widespread SendInput() trick it injects no keystrokes into whatever
- * window the user happens to be typing in. */
+ * foreground lock timeout for the duration of the call usually clears that,
+ * and unlike the widespread SendInput() trick it injects nothing into
+ * whatever window the user happens to be typing in. It is not always enough:
+ * some systems run with the timeout pinned high by another tool, which is
+ * what the input-nudge tier in ForceToForeground exists for. */
 static void ClearForegroundLock(DWORD* savedTimeout, BOOL* restore) {
     *restore      = FALSE;
     *savedTimeout = 0;
@@ -315,8 +364,6 @@ static BOOL ForceToForeground(HWND hwnd) {
         return TRUE;
     if (GetForegroundWindow() == hwnd)
         return TRUE;
-    if (!IsWindowVisible(hwnd))
-        return FALSE;      /* created but not shown yet - let the timer retry */
 
     DWORD targetThread  = GetWindowThreadProcessId(hwnd, NULL);
     DWORD currentThread = GetCurrentThreadId();
@@ -325,21 +372,49 @@ static BOOL ForceToForeground(HWND hwnd) {
     if (targetThread != 0 && targetThread != currentThread)
         attached = AttachThreadInput(currentThread, targetThread, TRUE);
 
+    /* Show it unconditionally. Waiting for IsWindowVisible before acting looks
+     * tidier but leaves the prompt buried whenever the window is not flagged
+     * visible at the moment we see it. */
     if (IsIconic(hwnd))
         ShowWindow(hwnd, SW_RESTORE);
+    else
+        ShowWindow(hwnd, SW_SHOW);
 
     /* The prompt stays topmost for the rest of its life. The original toggled
      * HWND_TOPMOST straight back to HWND_NOTOPMOST, which undid the effect the
      * moment it was applied. */
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
+    const TCHAR* how = _T("direct");
     BOOL ok = SetForegroundWindow(hwnd);
+
     if (!ok) {
+        /* Dropping the foreground lock timeout is enough on a default system
+         * and injects nothing. */
         DWORD savedTimeout;
         BOOL  restore;
         ClearForegroundLock(&savedTimeout, &restore);
         ok = SetForegroundWindow(hwnd);
         RestoreForegroundLock(savedTimeout, restore);
+        how = _T("lock-timeout");
+    }
+
+    if (!ok) {
+        /* Last resort. Some systems run with the lock timeout pinned high by
+         * another tool, and then only a real input event releases the
+         * foreground. Ctrl on its own is inert in applications, unlike the
+         * Shift this used to send, which feeds the StickyKeys counter. */
+        INPUT inputs[2];
+        ZeroMemory(inputs, sizeof(inputs));
+        inputs[0].type       = INPUT_KEYBOARD;
+        inputs[0].ki.wVk     = VK_CONTROL;
+        inputs[1].type       = INPUT_KEYBOARD;
+        inputs[1].ki.wVk     = VK_CONTROL;
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(2, inputs, sizeof(INPUT));
+
+        ok = SetForegroundWindow(hwnd);
+        how = _T("input-nudge");
     }
 
     if (ok) {
@@ -351,7 +426,11 @@ static BOOL ForceToForeground(HWND hwnd) {
     if (attached)
         AttachThreadInput(currentThread, targetThread, FALSE);
 
-    return ok || GetForegroundWindow() == hwnd;
+    BOOL front = (GetForegroundWindow() == hwnd);
+    LogLine(_T("foreground hwnd=0x%p attached=%d via=%s ok=%d isForeground=%d"),
+            (void*)hwnd, attached ? 1 : 0, how, ok ? 1 : 0, front ? 1 : 0);
+
+    return ok || front;
 }
 
 static void CALLBACK WinEventProc(HWINEVENTHOOK hHook, DWORD event, HWND hwnd,
@@ -362,24 +441,29 @@ static void CALLBACK WinEventProc(HWINEVENTHOOK hHook, DWORD event, HWND hwnd,
     UNREFERENCED_PARAMETER(idEventThread);
     UNREFERENCED_PARAMETER(dwmsEventTime);
 
-    /* EVENT_OBJECT_CREATE fires for carets, menu items, list entries and every
-     * other accessible object in every process on the desktop - hundreds of
-     * times per second on a busy machine. Rejecting everything that is not a
-     * top-level window before touching the process list is what keeps this
-     * hook off the CPU. */
-    if (hwnd == NULL || idObject != OBJID_WINDOW || idChild != CHILDID_SELF)
-        return;
-    if (GetAncestor(hwnd, GA_PARENT) != GetDesktopWindow())
+    if (hwnd == NULL)
         return;
 
+    /* Deliberately no filtering on idObject, idChild or window ancestry.
+     * EVENT_OBJECT_CREATE does fire for carets, menu items and every other
+     * accessible object on the desktop, and rejecting all but top-level
+     * OBJID_WINDOW events looks like the obvious saving - but the credential
+     * prompt does not reliably present itself that way, and filtering on it
+     * stops the tool matching anything at all. What actually keeps this hook
+     * cheap is the cached per-PID lookup below: the old code ran a full
+     * CreateToolhelp32Snapshot here, which is where the CPU went. */
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
     if (!IsBrokerProcess(pid))
         return;
 
-#ifdef _DEBUG
-    OutputDebugString(_T("AuthAlwaysOnTop: CredentialUIBroker window detected.\n"));
-#endif
+    if (g_logging) {
+        TCHAR cls[96] = { 0 };
+        GetClassName(hwnd, cls, ARRAYSIZE(cls));
+        LogLine(_T("detected hwnd=0x%p pid=%lu idObject=%ld idChild=%ld visible=%d class=%s"),
+                (void*)hwnd, pid, idObject, idChild,
+                IsWindowVisible(hwnd) ? 1 : 0, cls);
+    }
 
     /* Hand the work to the message loop so the foreground dance never stalls
      * delivery of further accessibility events. */
@@ -624,10 +708,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
-    g_hInst = hInstance;
+    g_hInst   = hInstance;
+    g_logging = (lpCmdLine != NULL && StrStrIA(lpCmdLine, "--log") != NULL);
 
     DWORD n = GetModuleFileName(NULL, g_exePath, ARRAYSIZE(g_exePath));
     if (n == 0 || n >= ARRAYSIZE(g_exePath))
@@ -652,9 +736,16 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     }
 
     ResolveConfigPath();
+    ResolveLogPath();
     ResolveBrokerPath();
     LoadSettings();
     RepairAutostartPath();
+
+    DWORD lockTimeout = 0;
+    SystemParametersInfo(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &lockTimeout, 0);
+    LogLine(_T("---- started, exe=%s"), g_exePath);
+    LogLine(_T("     broker expected at %s"), g_brokerPath);
+    LogLine(_T("     foreground lock timeout = %lu ms"), lockTimeout);
 
     g_taskbarCreated = RegisterWindowMessage(_T("TaskbarCreated"));
 

@@ -1,8 +1,11 @@
 name: Build AuthAlwaysOnTop
 
 on:
+  # Every branch, not just main: work lands on a topic branch first and the
+  # point of this workflow is to find out whether it builds before it is
+  # merged anywhere.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
   workflow_dispatch:

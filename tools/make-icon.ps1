@@ -1,13 +1,17 @@
 # Generates AuthAlwaysOnTop.ico from scratch with GDI+.
 #
-# Original artwork: stylised fingerprint ridges on a rounded badge. Drawn from
-# primitives here, so the provenance is unambiguous and it carries the same
-# license as the rest of the project. Deliberately NOT a copy of any vendor's
-# artwork - a fingerprint as such is a generic motif, a specific logo is not.
+# Original artwork: the letters A, O and T set out as a face -
 #
-# Each size is drawn at its own scale rather than downsampled: at 16 px the
-# outer ridge is dropped and strokes are widened, otherwise the tray icon
-# turns to mush.
+#     A   T
+#       O
+#
+# Drawn from primitives here rather than in an editor, so the provenance is
+# reproducible and it carries the same license as the rest of the project.
+# Nothing is traced from anyone else's logo or icon set.
+#
+# Each size is drawn at its own scale rather than downsampled, and the tray
+# sizes get their own proportions and no badge, because scaling the large
+# layout down leaves a smudge in the middle of an empty square.
 
 param(
     [Parameter(Mandatory = $true)][string]$OutIco,
@@ -31,85 +35,163 @@ function New-IconBitmap {
 
     $s = [double]$Size
 
-    # --- rounded badge -----------------------------------------------------
-    # A filled badge keeps the glyph readable on both light and dark taskbars;
-    # a bare white glyph would disappear in light theme.
-    $inset  = [Math]::Max(0.5, $s * 0.03)
-    $radius = $s * 0.22
-    $rect   = New-Object System.Drawing.RectangleF($inset, $inset, ($s - 2 * $inset), ($s - 2 * $inset))
+    # Notification area icons sit among free-standing glyphs on a transparent
+    # ground; a filled tile there reads as an app icon someone pasted into the
+    # tray. So the badge is only drawn at the sizes Explorer and the file
+    # properties dialog use, and the small entries are a coloured glyph on
+    # nothing. Blue rather than white, because the taskbar is not always dark.
+    $useBadge = ($Size -ge 40)
 
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $d = $radius * 2
-    $path.AddArc($rect.Left, $rect.Top, $d, $d, 180, 90)
-    $path.AddArc($rect.Right - $d, $rect.Top, $d, $d, 270, 90)
-    $path.AddArc($rect.Right - $d, $rect.Bottom - $d, $d, $d, 0, 90)
-    $path.AddArc($rect.Left, $rect.Bottom - $d, $d, $d, 90, 90)
-    $path.CloseFigure()
+    if ($useBadge) {
+        $inset  = [Math]::Max(0.5, $s * 0.03)
+        $radius = $s * 0.22
+        $rect   = New-Object System.Drawing.RectangleF($inset, $inset, ($s - 2 * $inset), ($s - 2 * $inset))
 
-    $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-        (New-Object System.Drawing.PointF(0, 0)),
-        (New-Object System.Drawing.PointF($s, $s)),
-        [System.Drawing.Color]::FromArgb(255, 0, 145, 255),
-        [System.Drawing.Color]::FromArgb(255, 0, 80, 179))
-    $g.FillPath($brush, $path)
-    $brush.Dispose()
-    $path.Dispose()
+        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $d = $radius * 2
+        $path.AddArc($rect.Left, $rect.Top, $d, $d, 180, 90)
+        $path.AddArc($rect.Right - $d, $rect.Top, $d, $d, 270, 90)
+        $path.AddArc($rect.Right - $d, $rect.Bottom - $d, $d, $d, 0, 90)
+        $path.AddArc($rect.Left, $rect.Bottom - $d, $d, $d, 90, 90)
+        $path.CloseFigure()
 
-    # --- the two motifs sharing the same strokes ---------------------------
-    # Two eyes above a stack of nested upward arcs. The innermost arc is a
-    # mouth, the outer ones are ridges, and they are the same strokes: the
-    # mark reads as a smile and as a fingerprint at once.
+        $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+            (New-Object System.Drawing.PointF(0, 0)),
+            (New-Object System.Drawing.PointF($s, $s)),
+            [System.Drawing.Color]::FromArgb(255, 0, 145, 255),
+            [System.Drawing.Color]::FromArgb(255, 0, 80, 179))
+        $g.FillPath($brush, $path)
+        $brush.Dispose()
+        $path.Dispose()
+    }
+
+    # --- A O T arranged as a face ------------------------------------------
+    # The eyes are the letters A and T, the mouth is an O:
     #
-    # An earlier attempt wrapped ridges over and around a face. That never
-    # works - anything arcing over a head and down past the cheeks reads as
-    # hair long before it reads as a ridge pattern. Keeping every arc below
-    # the eyes is what removes the ambiguity.
+    #     A   T
+    #       O
+    #
+    # Two marks up top and a round one below is enough for the eye to resolve
+    # a face before it resolves the lettering, so the icon still reads at a
+    # glance and spells the application out on a second look.
     $cx = $s * 0.5
-    $ay = $s * 0.405                    # centre the arcs share
 
-    # Arcs are shed as the icon shrinks; the innermost one is the mouth and
-    # always survives, so the silhouette stays the same mark at every size.
-    if ($Size -le 20) {
-        $arcs = @(0.150)
-        $strokeRatio = 0.100
-    } elseif ($Size -le 32) {
-        $arcs = @(0.135, 0.245)
-        $strokeRatio = 0.082
-    } elseif ($Size -le 48) {
-        $arcs = @(0.125, 0.215, 0.305)
-        $strokeRatio = 0.060
+    # Proportion decides which reading wins. Letters set large, tall and far
+    # apart stop being eyes and become a monogram in a box, so they are kept
+    # roughly square and close together - each one then occupies a round-ish
+    # patch that the eye takes for an eye before it parses the letter.
+    #
+    # There is a floor on how squat they can go: the stroke has to stay well
+    # under the letter height or the A's counter closes up and its crossbar
+    # disappears into the strokes around it.
+    # At the badge sizes there are pixels to spare, so the letters are set
+    # small against a full-size mouth. Small marks set a little further apart
+    # read as a pair of eyes; large ones sitting close read as the word "AT".
+    # The stroke thins with them to keep the ratio that leaves the A's
+    # crossbar standing.
+    if ($useBadge) {
+        $eyeDx = 0.176; $eyeY = 0.328
+        $moY   = 0.660; $moW  = 0.205; $moTop = 0.086; $moBot = 0.146
+        if ($Size -lt 64) {
+            # 0.038 of 40 px is a 1.5 px line - too frail. Letters and stroke
+            # both grow, keeping the ratio between them.
+            $letterW = 0.165; $letterH = 0.155
+            $strokeRatio = 0.044
+        } else {
+            $letterW = 0.150; $letterH = 0.140
+            $strokeRatio = 0.038
+        }
     } else {
-        $arcs = @(0.118, 0.187, 0.256, 0.325)
-        $strokeRatio = 0.047
+        # No tile to sit in, so the mark grows into the whole square and the
+        # stroke thickens as the pixels run out.
+        $letterW = 0.212; $letterH = 0.196
+        $eyeDx   = 0.188; $eyeY    = 0.322
+        $moY     = 0.706; $moW     = 0.230; $moTop = 0.100; $moBot = 0.168
+        if     ($Size -le 16) { $strokeRatio = 0.120 }
+        elseif ($Size -le 20) { $strokeRatio = 0.108 }
+        elseif ($Size -le 24) { $strokeRatio = 0.098 }
+        else                  { $strokeRatio = 0.086 }
     }
 
     $stroke = [Math]::Max(1.0, $s * $strokeRatio)
-    $ink = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
-    $pen = New-Object System.Drawing.Pen($ink, [float]$stroke)
+
+    if ($useBadge) {
+        $ink = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
+        $pen = New-Object System.Drawing.Pen($ink, [float]$stroke)
+    } else {
+        # Bright enough to hold up on a light taskbar, saturated enough not to
+        # wash out on a dark one.
+        $glyphBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+            (New-Object System.Drawing.PointF(0, 0)),
+            (New-Object System.Drawing.PointF(0, $s)),
+            [System.Drawing.Color]::FromArgb(255, 92, 190, 255),
+            [System.Drawing.Color]::FromArgb(255, 46, 144, 245))
+        $pen = New-Object System.Drawing.Pen($glyphBrush, [float]$stroke)
+    }
     $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $pen.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
-    $fill = New-Object System.Drawing.SolidBrush($ink)
+    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
 
-    # Slightly wider than tall, the way a smile is.
-    foreach ($r in $arcs) {
-        $ry = $s * [double]$r
-        $rx = $ry * 1.06
-        $g.DrawArc($pen, [float]($cx - $rx), [float]($ay - $ry), [float]($rx * 2), [float]($ry * 2),
-                   [float]22, [float]136)
-    }
+    $lw = $s * $letterW
+    $lh = $s * $letterH
 
-    # Eyes, clear of the topmost arc ends.
-    if ($Size -le 20) { $eyeDx = $s * 0.150 } else { $eyeDx = $s * 0.138 }
-    $eyeY = $s * 0.318
-    $eyeR = [Math]::Max(0.9, $s * 0.052)
-    foreach ($sx in @(-1, 1)) {
-        $ex = $cx + $sx * $eyeDx
-        $g.FillEllipse($fill, [float]($ex - $eyeR), [float]($eyeY - $eyeR),
-                       [float]($eyeR * 2), [float]($eyeR * 2))
-    }
+    # A, left eye
+    $aCx = $cx - $s * $eyeDx
+    $aCy = $s * $eyeY
+    $g.DrawLine($pen, [float]($aCx - $lw / 2), [float]($aCy + $lh / 2), [float]$aCx, [float]($aCy - $lh / 2))
+    $g.DrawLine($pen, [float]$aCx, [float]($aCy - $lh / 2), [float]($aCx + $lw / 2), [float]($aCy + $lh / 2))
+    # Crossbar low enough that a fat stroke does not weld it to the apex.
+    $barY = $aCy + $lh * 0.16
+    $g.DrawLine($pen, [float]($aCx - $lw * 0.29), [float]$barY, [float]($aCx + $lw * 0.29), [float]$barY)
 
-    $fill.Dispose()
+    # T, right eye
+    $tCx = $cx + $s * $eyeDx
+    $tCy = $s * $eyeY
+    $g.DrawLine($pen, [float]($tCx - $lw / 2), [float]($tCy - $lh / 2), [float]($tCx + $lw / 2), [float]($tCy - $lh / 2))
+    $g.DrawLine($pen, [float]$tCx, [float]($tCy - $lh / 2), [float]$tCx, [float]($tCy + $lh / 2))
+
+    # O, the mouth. Built from four quadrant beziers, not two halves: joining
+    # two half-curves at the left and right extremes leaves a cusp there, and
+    # a shape with pointed ends is an almond - it reads as an eye, not a
+    # mouth. Quadrants keep the tangent vertical at both ends, so the ends
+    # stay round while the top can still be shallower than the bottom.
+    # 0.5523 is the usual cubic-bezier circle constant.
+    $mw = $s * $moW
+    $mt = $s * $moTop
+    $mb = $s * $moBot
+    $my = $s * $moY
+    $kc = 0.5523
+
+    $mp = New-Object System.Drawing.Drawing2D.GraphicsPath
+    # left -> top
+    $mp.AddBezier([float]($cx - $mw), [float]$my,
+                  [float]($cx - $mw), [float]($my - $mt * $kc),
+                  [float]($cx - $mw * $kc), [float]($my - $mt),
+                  [float]$cx, [float]($my - $mt))
+    # top -> right
+    $mp.AddBezier([float]$cx, [float]($my - $mt),
+                  [float]($cx + $mw * $kc), [float]($my - $mt),
+                  [float]($cx + $mw), [float]($my - $mt * $kc),
+                  [float]($cx + $mw), [float]$my)
+    # right -> bottom
+    $mp.AddBezier([float]($cx + $mw), [float]$my,
+                  [float]($cx + $mw), [float]($my + $mb * $kc),
+                  [float]($cx + $mw * $kc), [float]($my + $mb),
+                  [float]$cx, [float]($my + $mb))
+    # bottom -> left
+    $mp.AddBezier([float]$cx, [float]($my + $mb),
+                  [float]($cx - $mw * $kc), [float]($my + $mb),
+                  [float]($cx - $mw), [float]($my + $mb * $kc),
+                  [float]($cx - $mw), [float]$my)
+    $mp.CloseFigure()
+    $g.DrawPath($pen, $mp)
+    $mp.Dispose()
+
+    # No second ring inside the O: a dot in the middle of it turns the mouth
+    # into an eye and the face reading collapses.
+
     $pen.Dispose()
+    if (-not $useBadge) { $glyphBrush.Dispose() }
     $g.Dispose()
     return $bmp
 }
