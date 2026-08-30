@@ -27,7 +27,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [x64, Win32]
+        # Solution platform names, not project ones: the solution calls 32-bit
+        # "x86" and maps it onto the project's "Win32" internally.
+        platform: [x64, x86]
 
     steps:
       # Actions are pinned to commit SHAs; a moving tag would let an upstream
