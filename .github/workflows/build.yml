@@ -43,7 +43,32 @@ jobs:
           msbuild-architecture: x64
 
       - name: Build Release ${{ matrix.platform }}
-        run: msbuild AuthAlwaysOnTop.sln /m /p:Configuration=Release /p:Platform=${{ matrix.platform }}
+        run: msbuild AuthAlwaysOnTop.sln /m /p:Configuration=Release /p:Platform=${{ matrix.platform }} /fl "/flp:logfile=msbuild-${{ matrix.platform }}.log;verbosity=normal"
+
+      # Job logs need admin rights on the repository to read through the API,
+      # so a failure otherwise surfaces as nothing but "exit code 1". Echoing
+      # the compiler's own lines as workflow errors puts them in the check
+      # annotations, which anyone can read.
+      - name: Surface build errors
+        if: failure()
+        shell: pwsh
+        run: |
+          $log = "msbuild-${{ matrix.platform }}.log"
+          if (-not (Test-Path $log)) { Write-Output "::error::msbuild produced no log file"; exit 0 }
+          $hits = Get-Content $log |
+                  Select-String -Pattern '\berror\b|: fatal |LNK\d{4}|MSB\d{4}' |
+                  Select-Object -First 40
+          if ($hits) { $hits | ForEach-Object { Write-Output ("::error::" + $_.Line.Trim()) } }
+          else { Write-Output "::error::no error lines matched; see the uploaded log artifact" }
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msbuild-log-${{ matrix.platform }}
+          path: msbuild-${{ matrix.platform }}.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: List built executables
         shell: pwsh
